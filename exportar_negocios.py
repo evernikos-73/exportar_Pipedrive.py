@@ -50,7 +50,7 @@ df_deals = limpiar_dataframe(df_deals)
 exportar_a_sheets(df_deals, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Deals")
 
 # 📥 Exportar actividades
-df_activities = obtener_datos_paginados("activities")
+df_activities = obtener_datos_paginados("notes")
 df_activities = limpiar_dataframe(df_activities)
 exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Actividades")
 
