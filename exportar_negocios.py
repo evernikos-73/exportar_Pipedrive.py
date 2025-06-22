@@ -12,8 +12,8 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(cred_dict, scope)
 client = gspread.authorize(creds)
 
 # 📌 Pipedrive API
-api_token = os.environ["dc6509b45cd8b6d62c2ccdaac1a26e7c24725551"]
-base_url = "https://api.pipedrive.com/v1/deals?api_token=" + "dc6509b45cd8b6d62c2ccdaac1a26e7c24725551"
+api_token = os.environ["PIPEDRIVE_API_KEY"]
+base_url = "https://api.pipedrive.com/v1/deals?api_token=" + "PIPEDRIVE_API_KEY"
 
 # Obtener negocios
 response = requests.get(base_url)
