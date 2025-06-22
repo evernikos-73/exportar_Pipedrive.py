@@ -1,0 +1,27 @@
+name: Exportar negocios desde Pipedrive
+
+on:
+  schedule:
+    - cron: '0 11 * * *'  # 8 AM Argentina (UTC-3 → 11 UTC)
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar el repositorio
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar script de exportación
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          PIPEDRIVE_API_KEY: ${{ secrets.PIPEDRIVE_API_KEY }}
+        run: python exportar_negocios.py
