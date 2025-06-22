@@ -13,7 +13,7 @@ client = gspread.authorize(creds)
 
 # 📌 Pipedrive API
 api_token = os.environ["PIPEDRIVE_API_KEY"]
-base_url = "https://api.pipedrive.com/v1/deals?api_token=" + "PIPEDRIVE_API_KEY"
+base_url = "https://api.pipedrive.com/v1/deals?api_token=" + "dc6509b45cd8b6d62c2ccdaac1a26e7c24725551"
 
 # Obtener negocios
 response = requests.get(base_url)
