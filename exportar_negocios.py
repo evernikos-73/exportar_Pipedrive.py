@@ -52,6 +52,6 @@ exportar_a_sheets(df_deals, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1c
 # 📥 Exportar actividades
 df_activities = obtener_datos_paginados("activities")
 df_activities = limpiar_dataframe(df_activities)
-exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipeline Actividades")
+exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Actividades")
 
 print("🎉 Exportación completa")
