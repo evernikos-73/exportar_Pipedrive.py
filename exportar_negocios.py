@@ -26,9 +26,14 @@ df = pd.json_normalize(data["data"])
 spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit")
 worksheet = spreadsheet.worksheet("Pipedrive Deals")
 worksheet.clear()
+
 # Limpiar datos antes de subir
 df.replace([float('inf'), float('-inf')], pd.NA, inplace=True)
 df.fillna("", inplace=True)
+
+# Convertir listas/diccionarios a string
+for col in df.columns:
+    df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x)
 
 # Subir a Google Sheets
 worksheet.update([df.columns.values.tolist()] + df.values.tolist())
