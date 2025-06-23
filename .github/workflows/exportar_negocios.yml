@@ -2,7 +2,7 @@ name: Exportar negocios desde Pipedrive
 
 on:
   schedule:
-    - cron: '0 11 * * *'  # 8 AM Argentina (UTC-3 → 11 UTC)
+    - cron: '0 10 * * *'  # 8 AM Argentina (UTC-3 → 11 UTC)
   workflow_dispatch:
 
 jobs:
