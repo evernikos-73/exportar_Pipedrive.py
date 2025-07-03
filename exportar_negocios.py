@@ -70,7 +70,7 @@ df_activities_done = obtener_datos_paginados("activities", {"done": 1})
 
 df_activities = pd.concat([df_activities_pend, df_activities_done], ignore_index=True)
 df_activities = limpiar_dataframe(df_activities)
-exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1c8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Activities")
+exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Activities")
 
 print("🎉 Exportación completa")
 
