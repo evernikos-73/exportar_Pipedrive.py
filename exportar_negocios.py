@@ -15,14 +15,24 @@ client = gspread.authorize(creds)
 api_token = os.environ["PIPEDRIVE_API_KEY"]
 base_url = "https://api.pipedrive.com/v1"
 
-def obtener_datos_paginados(endpoint):
+def obtener_datos_paginados(endpoint, params=None):
     page = 0
     resultados = []
+    if params is None:
+        params = {}
     while True:
         page += 1
-        url = f"{base_url}/{endpoint}?api_token={api_token}&start={(page - 1) * 500}&limit=500"
-        response = requests.get(url)
+        # Actualizo los parámetros con paginación y token
+        parametros = params.copy()  # para no modificar el dict externo
+        parametros.update({
+            "api_token": api_token,
+            "start": (page - 1) * 500,
+            "limit": 500
+        })
+        url = f"{base_url}/{endpoint}"
+        response = requests.get(url, params=parametros)
         data = response.json()
+
         if not data.get("data"):
             break
         resultados.extend(data["data"])
@@ -54,9 +64,13 @@ df_notes = obtener_datos_paginados("notes")
 df_notes = limpiar_dataframe(df_notes)
 exportar_a_sheets(df_notes, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Notas")
 
-# 📥 Exportar actividades
-df_activities = obtener_datos_paginados("activities")
+# 📥 Exportar actividades (pendientes y completadas)
+df_activities_pend = obtener_datos_paginados("activities", {"done": 0})
+df_activities_done = obtener_datos_paginados("activities", {"done": 1})
+
+df_activities = pd.concat([df_activities_pend, df_activities_done], ignore_index=True)
 df_activities = limpiar_dataframe(df_activities)
-exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Activities")
+exportar_a_sheets(df_activities, "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1c8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit", "Pipedrive Activities")
 
 print("🎉 Exportación completa")
+
