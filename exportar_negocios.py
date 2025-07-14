@@ -13,29 +13,30 @@ client = gspread.authorize(creds)
 
 # 📌 Pipedrive API Token
 api_token = os.environ["PIPEDRIVE_API_KEY"]
-base_url = "https://api.pipedrive.com/v1"
+base_url = "https://api.pipedrive.com/v2"  # Cambiado a v2
 
 def obtener_datos_paginados(endpoint, params=None):
     page = 0
     resultados = []
     if params is None:
         params = {}
+    params.update({"api_token": api_token})  # Añadir token a los parámetros
     while True:
         page += 1
-        parametros = params.copy()
-        parametros.update({
-            "api_token": api_token,
+        params.update({
             "start": (page - 1) * 500,
             "limit": 500
         })
         url = f"{base_url}/{endpoint}"
-        response = requests.get(url, params=parametros)
+        response = requests.get(url, params=params)
         data = response.json()
-        if not data.get("data"):
+        if not data.get("items"):  # Cambiado de "data" a "items" para v2
             break
-        resultados.extend(data["data"])
-        if not data.get("additional_data", {}).get("pagination", {}).get("more_items_in_collection"):
+        resultados.extend(data["items"])
+        next_page_token = data.get("additional_data", {}).get("pagination", {}).get("next_page_token")
+        if not next_page_token:
             break
+        params["next_page_token"] = next_page_token  # Usar next_page_token en v2
     return pd.json_normalize(resultados)
 
 def limpiar_dataframe(df):
@@ -78,7 +79,7 @@ df_notes = limpiar_dataframe(df_notes)
 exportar_a_sheets_limited(df_notes, sheet_url, "Pipedrive Notas", "AA")
 
 # 📥 Exportar actividades (hasta DA)
-df_activities = obtener_datos_paginados("activities", {"user_id": 0})
+df_activities = obtener_datos_paginados("activities", {"user_id": "0"})  # Cambiado a string para v2
 df_activities = limpiar_dataframe(df_activities)
 exportar_a_sheets_limited(df_activities, sheet_url, "Pipedrive Activities", "DA")
 
@@ -87,4 +88,4 @@ df_users = obtener_datos_paginados("users")
 df_users = limpiar_dataframe(df_users)
 exportar_completo(df_users, sheet_url, "Pipedrive Users")
 
-print("🎉 Exportación completa")
+print("🎉 Exportación completa. Hoy es 14 de julio de 2025, 06:19 PM -03.")
