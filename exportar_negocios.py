@@ -35,7 +35,7 @@ CLEAR_RANGES = {
     "Pipedrive Analisis": "A:ZZ"
 }
 
-# --- Funciones de fetching ---
+# --- Fetching ---
 def fetch_data_cursor(url, extra_params):
     all_data = []
     cursor = None
@@ -100,6 +100,17 @@ def update_sheet(sheet, dataframe, clear_range):
     sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
+# --- Normalizar user_id y org_id ---
+def normalize_user_id(df, field):
+    if field in df.columns:
+        if isinstance(df[field].iloc[0], dict):
+            df[field] = df[field].apply(lambda x: x.get('id') if isinstance(x, dict) else np.nan)
+    elif f"{field}.id" in df.columns:
+        df[field] = df[f"{field}.id"]
+    else:
+        df[field] = np.nan
+    return df
+
 # --- Build analysis DF ---
 def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     fechas = pd.date_range("2025-01-01", "2026-12-01", freq='MS')
@@ -113,15 +124,11 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     base = base.merge(orgs, on='OrganizationID', how='left')
     base = base.merge(usuarios, on='userId', how='left')
 
-    # Normalizar user_id y org_id
-    if 'user_id' not in df_deals.columns and 'user_id.id' in df_deals.columns:
-        df_deals['user_id'] = df_deals['user_id.id']
-    if 'org_id' not in df_deals.columns and 'org_id.id' in df_deals.columns:
-        df_deals['org_id'] = df_deals['org_id.id']
-    if 'user_id' not in df_activities.columns and 'user_id.id' in df_activities.columns:
-        df_activities['user_id'] = df_activities['user_id.id']
-    if 'org_id' not in df_activities.columns and 'org_id.id' in df_activities.columns:
-        df_activities['org_id'] = df_activities['org_id.id']
+    # Normalizar fields
+    df_activities = normalize_user_id(df_activities, 'user_id')
+    df_deals = normalize_user_id(df_deals, 'user_id')
+    df_activities = normalize_user_id(df_activities, 'org_id')
+    df_deals = normalize_user_id(df_deals, 'org_id')
 
     if 'done' in df_activities.columns:
         df_activities['done'] = df_activities['done'].astype(bool)
@@ -230,4 +237,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
