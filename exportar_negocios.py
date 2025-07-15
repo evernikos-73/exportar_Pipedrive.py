@@ -33,10 +33,10 @@ ENDPOINTS_CONFIG = {
 }
 
 CLEAR_RANGES = {
-    "Pipedrive Deals": "A:V",
+    "Pipedrive Deals": "A:AJ",
     "Pipedrive Notes": "A:T",
     "Pipedrive Organizations": "A:AB",
-    "Pipedrive Activities": "A:AJ",
+    "Pipedrive Activities": "A:AA",
     "Pipedrive Users": "A:T",
     "Pipedrive Analisis": "A:ZZ"
 }
