@@ -14,15 +14,16 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 SPREADSHEET_ID = "1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20"
 
 BASE_URL_V1 = "https://inprocilsa.pipedrive.com/api/v1"
+BASE_URL_V2 = "https://inprocilsa.pipedrive.com/api/v2"
 HEADERS = {"x-api-token": PIPEDRIVE_API_KEY}
 
 ENDPOINTS_CONFIG = {
-    "Deals": ("/deals/collection", "cursor", {}, "Pipedrive Deals"),
-    "Organizations": ("/organizations/collection", "cursor", {}, "Pipedrive Organizations"),
-    "Activities": ("/activities/collection", "cursor", {}, "Pipedrive Activities"),
-    "Leads": ("/leads", "offset", {}, "Pipedrive Leads"),
-    "Users": ("/users", "offset", {}, "Pipedrive Users"),
-    "Notes": ("/notes", "offset", {}, "Pipedrive Notes"),
+    "Deals": ("/deals", "cursor", {"include_fields": "first_won_time,products_count"}, "Pipedrive Deals", BASE_URL_V2),
+    "Organizations": ("/organizations/collection", "cursor", {}, "Pipedrive Organizations", BASE_URL_V1),
+    "Activities": ("/activities", "cursor", {}, "Pipedrive Activities", BASE_URL_V2),
+    "Leads": ("/leads", "offset", {}, "Pipedrive Leads", BASE_URL_V1),
+    "Users": ("/users", "offset", {}, "Pipedrive Users", BASE_URL_V1),
+    "Notes": ("/notes", "offset", {}, "Pipedrive Notes", BASE_URL_V1),
 }
 
 CLEAR_RANGES = {
@@ -34,10 +35,10 @@ CLEAR_RANGES = {
     "Pipedrive Analisis": "A:ZZ"
 }
 
-def fetch_data_cursor(endpoint, extra_params):
+# --- Funciones de fetching ---
+def fetch_data_cursor(url, extra_params):
     all_data = []
     cursor = None
-    url = f"{BASE_URL_V1}{endpoint}"
     while True:
         params = extra_params.copy()
         if cursor:
@@ -59,11 +60,10 @@ def fetch_data_cursor(endpoint, extra_params):
             break
     return all_data
 
-def fetch_data_offset(endpoint, extra_params):
+def fetch_data_offset(url, extra_params):
     all_data = []
     start = 0
     limit = 100
-    url = f"{BASE_URL_V1}{endpoint}"
     while True:
         params = {"start": start, "limit": limit}
         params.update(extra_params)
@@ -84,6 +84,7 @@ def fetch_data_offset(endpoint, extra_params):
         start = pagination.get("next_start", start + limit)
     return all_data
 
+# --- Google Sheets ---
 def authenticate_google_sheets():
     creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
     scopes = [
@@ -99,6 +100,7 @@ def update_sheet(sheet, dataframe, clear_range):
     sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
+# --- Build analysis DF ---
 def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     fechas = pd.date_range("2025-01-01", "2026-12-01", freq='MS')
     orgs = df_orgs[['id', 'name']].drop_duplicates()
@@ -111,12 +113,11 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     base = base.merge(orgs, on='OrganizationID', how='left')
     base = base.merge(usuarios, on='userId', how='left')
 
-    # Aplanar user_id y org_id en Deals
+    # Normalizar user_id y org_id
     if 'user_id' not in df_deals.columns and 'user_id.id' in df_deals.columns:
         df_deals['user_id'] = df_deals['user_id.id']
     if 'org_id' not in df_deals.columns and 'org_id.id' in df_deals.columns:
         df_deals['org_id'] = df_deals['org_id.id']
-    # Aplanar user_id y org_id en Activities
     if 'user_id' not in df_activities.columns and 'user_id.id' in df_activities.columns:
         df_activities['user_id'] = df_activities['user_id.id']
     if 'org_id' not in df_activities.columns and 'org_id.id' in df_activities.columns:
@@ -126,7 +127,6 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
         df_activities['done'] = df_activities['done'].astype(bool)
     if 'due_date' in df_activities.columns:
         df_activities['due_date'] = pd.to_datetime(df_activities['due_date'], errors='coerce')
-
     df_deals['add_time'] = pd.to_datetime(df_deals['add_time'], errors='coerce')
     df_deals['close_time'] = pd.to_datetime(df_deals['close_time'], errors='coerce')
     if 'status' not in df_deals.columns:
@@ -182,18 +182,18 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
         })
     return pd.DataFrame(result)
 
-
+# --- Main ---
 def main():
     client = authenticate_google_sheets()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
     dataframes = {}
-    for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
+    for name, (endpoint, pagination_type, extra_params, sheet_name, base_url) in ENDPOINTS_CONFIG.items():
         print(f"\n🔍 Procesando endpoint: {name}")
         if pagination_type == "cursor":
-            data = fetch_data_cursor(endpoint, extra_params)
+            data = fetch_data_cursor(base_url + endpoint, extra_params)
         else:
-            data = fetch_data_offset(endpoint, extra_params)
+            data = fetch_data_offset(base_url + endpoint, extra_params)
 
         if not data:
             print(f"⚠️ No se obtuvieron datos de {name}")
@@ -230,3 +230,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
