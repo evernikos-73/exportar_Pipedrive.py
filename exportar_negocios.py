@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # --- Configuración ---
 PIPEDRIVE_API_KEY = os.environ["PIPEDRIVE_API_KEY"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
-SPREADSHEET_ID = "TU_ID_DE_GOOGLE_SHEET_AQUI"  # <- Cambia por tu ID real
+SPREADSHEET_ID = "1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20"  # <- Cambia por tu ID real
 
 # Base API v1 Pipedrive
 BASE_URL_V1 = "https://inprocilsa.pipedrive.com/api/v1"
