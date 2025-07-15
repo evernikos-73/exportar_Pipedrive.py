@@ -4,17 +4,18 @@ import requests
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from itertools import product
+from datetime import datetime
+import numpy as np
 
 # --- Configuración global ---
 PIPEDRIVE_API_KEY = os.environ["PIPEDRIVE_API_KEY"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 SPREADSHEET_ID = "1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20"
 
-# API
 BASE_URL_V1 = "https://inprocilsa.pipedrive.com/api/v1"
 HEADERS = {"x-api-token": PIPEDRIVE_API_KEY}
 
-# Endpoints con configuración
 ENDPOINTS_CONFIG = {
     "Deals": ("/deals/collection", "cursor", {}, "Pipedrive Deals"),
     "Organizations": ("/organizations/collection", "cursor", {}, "Pipedrive Organizations"),
@@ -24,16 +25,14 @@ ENDPOINTS_CONFIG = {
     "Notes": ("/notes", "offset", {}, "Pipedrive Notes"),
 }
 
-# Rango máximo a limpiar por hoja
 CLEAR_RANGES = {
     "Pipedrive Deals": "A:V",
     "Pipedrive Notes": "A:T",
     "Pipedrive Organizations": "A:AB",
     "Pipedrive Activities": "A:AJ",
-    "Pipedrive Users": "A:T"
+    "Pipedrive Users": "A:T",
+    "Pipedrive Analisis": "A:ZZ"
 }
-
-# --- Funciones principales ---
 
 def fetch_data_cursor(endpoint, extra_params):
     all_data = []
@@ -100,12 +99,75 @@ def update_sheet(sheet, dataframe, clear_range):
     sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
-# --- Main ---
+def build_analysis_df(df_orgs, df_activities, df_deals):
+    fechas = pd.date_range("2025-01-01", "2026-12-01", freq='MS')
+    orgs = df_orgs[['id', 'name']].drop_duplicates()
+    orgs.columns = ['OrganizationID', 'Organization Name']
+    base = pd.DataFrame(list(product(fechas, orgs['OrganizationID'])), columns=['MesAño', 'OrganizationID'])
+    base = base.merge(orgs, on='OrganizationID', how='left')
 
+    if 'done' in df_activities.columns:
+        df_activities['done'] = df_activities['done'].astype(bool)
+    if 'org_id' not in df_activities.columns:
+        df_activities['org_id'] = np.nan
+    if 'due_date' in df_activities.columns:
+        df_activities['due_date'] = pd.to_datetime(df_activities['due_date'], errors='coerce')
+
+    df_deals['add_time'] = pd.to_datetime(df_deals['add_time'], errors='coerce')
+    df_deals['close_time'] = pd.to_datetime(df_deals['close_time'], errors='coerce')
+    if 'org_id' not in df_deals.columns:
+        df_deals['org_id'] = np.nan
+    if 'status' not in df_deals.columns:
+        df_deals['status'] = ""
+
+    result = []
+    for _, row in base.iterrows():
+        mes = row['MesAño']
+        org_id = row['OrganizationID']
+
+        act_totales = df_activities[
+            (df_activities['done']) &
+            (df_activities['org_id'] == org_id) &
+            (df_activities['due_date'].dt.to_period('M') == mes.to_period('M'))
+        ]
+        deals_creados = df_deals[
+            (df_deals['org_id'] == org_id) &
+            (df_deals['add_time'].dt.to_period('M') == mes.to_period('M'))
+        ]
+        deals_ganados = df_deals[
+            (df_deals['org_id'] == org_id) &
+            (df_deals['status'] == 'won') &
+            (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
+        ]
+        deals_perdidos = df_deals[
+            (df_deals['org_id'] == org_id) &
+            (df_deals['status'] == 'lost') &
+            (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
+        ]
+        act_negocios = df_activities[
+            (df_activities['done']) &
+            (df_activities['deal_id'].notna()) &
+            (df_activities['org_id'] == org_id) &
+            (df_activities['due_date'].dt.to_period('M') == mes.to_period('M'))
+        ]
+        result.append({
+            'MesAño': mes,
+            'OrganizationID': org_id,
+            'Organization Name': row['Organization Name'],
+            'Actividad Total': len(act_totales),
+            'Negocios creados': len(deals_creados),
+            'Negocios ganados': len(deals_ganados),
+            'Negocios perdidos': len(deals_perdidos),
+            'Actividad Negocios': len(act_negocios)
+        })
+    return pd.DataFrame(result)
+
+# --- Main ---
 def main():
     client = authenticate_google_sheets()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
+    dataframes = {}
     for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
         print(f"\n🔍 Procesando endpoint: {name}")
         if pagination_type == "cursor":
@@ -115,9 +177,11 @@ def main():
 
         if not data:
             print(f"⚠️ No se obtuvieron datos de {name}")
+            dataframes[name] = pd.DataFrame()
             continue
 
         df = pd.DataFrame(data)
+        dataframes[name] = df
         print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
 
         clear_range = CLEAR_RANGES.get(sheet_name, "A:ZZ")
@@ -125,9 +189,24 @@ def main():
             worksheet = spreadsheet.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
-
         update_sheet(worksheet, df, clear_range)
         print(f"Hoja '{sheet_name}' actualizada correctamente.")
 
+    # --- Crear y subir dataframe de análisis ---
+    df_analysis = build_analysis_df(
+        df_orgs=dataframes["Organizations"],
+        df_activities=dataframes["Activities"],
+        df_deals=dataframes["Deals"]
+    )
+    print(f"\n✅ Análisis generado con {len(df_analysis)} filas")
+
+    try:
+        ws_analysis = spreadsheet.worksheet("Pipedrive Analisis")
+    except gspread.exceptions.WorksheetNotFound:
+        ws_analysis = spreadsheet.add_worksheet(title="Pipedrive Analisis", rows="1000", cols="50")
+    update_sheet(ws_analysis, df_analysis, CLEAR_RANGES["Pipedrive Analisis"])
+    print("Hoja 'Pipedrive Analisis' actualizada correctamente.")
+
 if __name__ == "__main__":
     main()
+
