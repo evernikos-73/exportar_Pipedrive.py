@@ -5,16 +5,16 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- Configuración ---
+# --- Configuración global ---
 PIPEDRIVE_API_KEY = os.environ["PIPEDRIVE_API_KEY"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
-SPREADSHEET_ID = "1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20"  # <- Cambia por tu ID real
+SPREADSHEET_ID = "1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20"
 
-# Base API v1 Pipedrive
+# API
 BASE_URL_V1 = "https://inprocilsa.pipedrive.com/api/v1"
 HEADERS = {"x-api-token": PIPEDRIVE_API_KEY}
 
-# Endpoints y paginación
+# Endpoints con configuración
 ENDPOINTS_CONFIG = {
     "Deals": ("/deals/collection", "cursor", {}, "Pipedrive Deals"),
     "Organizations": ("/organizations/collection", "cursor", {}, "Pipedrive Organizations"),
@@ -24,7 +24,16 @@ ENDPOINTS_CONFIG = {
     "Notes": ("/notes", "offset", {}, "Pipedrive Notes"),
 }
 
-# --- Funciones ---
+# Rango máximo a limpiar por hoja
+CLEAR_RANGES = {
+    "Pipedrive Deals": "A:V",
+    "Pipedrive Notes": "A:T",
+    "Pipedrive Organizations": "A:AB",
+    "Pipedrive Activities": "A:AJ",
+    "Pipedrive Users": "A:T"
+}
+
+# --- Funciones principales ---
 
 def fetch_data_cursor(endpoint, extra_params):
     all_data = []
@@ -86,44 +95,39 @@ def authenticate_google_sheets():
     client = gspread.authorize(creds)
     return client
 
-CLEAR_RANGES = {
-    "Pipedrive Deals": "A:V",
-    "Pipedrive Notes": "A:T",
-    "Pipedrive Organizations": "A:AB",
-    "Pipedrive Activities": "A:AJ",
-    "Pipedrive Users": "A:T"
-}
-
 def update_sheet(sheet, dataframe, clear_range):
     print(f" - Borrando rango: {clear_range}")
     sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
+# --- Main ---
 
-for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
-    print(f"\n🔍 Procesando endpoint: {name}")
-    if pagination_type == "cursor":
-        data = fetch_data_cursor(endpoint, extra_params)
-    else:
-        data = fetch_data_offset(endpoint, extra_params)
+def main():
+    client = authenticate_google_sheets()
+    spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-    if not data:
-        print(f"⚠️ No se obtuvieron datos de {name}")
-        continue
+    for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
+        print(f"\n🔍 Procesando endpoint: {name}")
+        if pagination_type == "cursor":
+            data = fetch_data_cursor(endpoint, extra_params)
+        else:
+            data = fetch_data_offset(endpoint, extra_params)
 
-    df = pd.DataFrame(data)
-    print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
+        if not data:
+            print(f"⚠️ No se obtuvieron datos de {name}")
+            continue
 
-    clear_range = CLEAR_RANGES.get(sheet_name, "A:ZZ")  # default por si no hay definido
-    try:
-        worksheet = spreadsheet.worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
+        df = pd.DataFrame(data)
+        print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
 
-    update_sheet(worksheet, df, clear_range)
-    print(f"Hoja '{sheet_name}' actualizada correctamente.")
+        clear_range = CLEAR_RANGES.get(sheet_name, "A:ZZ")
+        try:
+            worksheet = spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
 
+        update_sheet(worksheet, df, clear_range)
+        print(f"Hoja '{sheet_name}' actualizada correctamente.")
 
 if __name__ == "__main__":
     main()
-
