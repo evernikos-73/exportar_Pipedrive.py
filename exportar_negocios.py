@@ -111,17 +111,24 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     base = base.merge(orgs, on='OrganizationID', how='left')
     base = base.merge(usuarios, on='userId', how='left')
 
+    # Aplanar user_id y org_id en Deals
+    if 'user_id' not in df_deals.columns and 'user_id.id' in df_deals.columns:
+        df_deals['user_id'] = df_deals['user_id.id']
+    if 'org_id' not in df_deals.columns and 'org_id.id' in df_deals.columns:
+        df_deals['org_id'] = df_deals['org_id.id']
+    # Aplanar user_id y org_id en Activities
+    if 'user_id' not in df_activities.columns and 'user_id.id' in df_activities.columns:
+        df_activities['user_id'] = df_activities['user_id.id']
+    if 'org_id' not in df_activities.columns and 'org_id.id' in df_activities.columns:
+        df_activities['org_id'] = df_activities['org_id.id']
+
     if 'done' in df_activities.columns:
         df_activities['done'] = df_activities['done'].astype(bool)
-    if 'org_id' not in df_activities.columns:
-        df_activities['org_id'] = np.nan
     if 'due_date' in df_activities.columns:
         df_activities['due_date'] = pd.to_datetime(df_activities['due_date'], errors='coerce')
 
     df_deals['add_time'] = pd.to_datetime(df_deals['add_time'], errors='coerce')
     df_deals['close_time'] = pd.to_datetime(df_deals['close_time'], errors='coerce')
-    if 'org_id' not in df_deals.columns:
-        df_deals['org_id'] = np.nan
     if 'status' not in df_deals.columns:
         df_deals['status'] = ""
 
@@ -139,18 +146,18 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
         ]
         deals_creados = df_deals[
             (df_deals['org_id'] == org_id) &
-            (df_deals['owner_id'] == user_id) &
+            (df_deals['user_id'] == user_id) &
             (df_deals['add_time'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_ganados = df_deals[
             (df_deals['org_id'] == org_id) &
-            (df_deals['owner_id'] == user_id) &
+            (df_deals['user_id'] == user_id) &
             (df_deals['status'] == 'won') &
             (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_perdidos = df_deals[
             (df_deals['org_id'] == org_id) &
-            (df_deals['owner_id'] == user_id) &
+            (df_deals['user_id'] == user_id) &
             (df_deals['status'] == 'lost') &
             (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
         ]
@@ -174,6 +181,7 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
             'Actividad Negocios': len(act_negocios)
         })
     return pd.DataFrame(result)
+
 
 def main():
     client = authenticate_google_sheets()
