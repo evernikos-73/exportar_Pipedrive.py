@@ -1,134 +1,120 @@
+import os
+import json
 import requests
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import os
-import json
+from google.oauth2.service_account import Credentials
 
-# 🔐 Google Sheets Auth
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-try:
-    cred_dict = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(cred_dict, scope)
-    client = gspread.authorize(creds)
-except KeyError:
-    print("⚠️ Variable de entorno 'GOOGLE_CREDENTIALS_JSON' no encontrada. Configúrala en tu entorno.")
-    exit(1)
-except json.JSONDecodeError:
-    print("⚠️ Error decodificando el JSON de 'GOOGLE_CREDENTIALS_JSON'. Verifica su formato.")
-    exit(1)
-except Exception as e:
-    print(f"⚠️ Error en la autenticación de Google Sheets: {e}")
-    exit(1)
+# --- Configuración ---
+PIPEDRIVE_API_KEY = os.environ["PIPEDRIVE_API_KEY"]
+GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
+SPREADSHEET_ID = "TU_ID_DE_GOOGLE_SHEET_AQUI"  # <- Cambia por tu ID real
 
-# 📌 Pipedrive API Token
-try:
-    api_token = os.environ["PIPEDRIVE_API_KEY"]
-except KeyError:
-    print("⚠️ Variable de entorno 'PIPEDRIVE_API_KEY' no encontrada. Configúrala en tu entorno.")
-    exit(1)
-base_url = "https://api.pipedrive.com/v2"  # Usando v2
+# Base API v1 Pipedrive
+BASE_URL_V1 = "https://inprocilsa.pipedrive.com/api/v1"
+HEADERS = {"x-api-token": PIPEDRIVE_API_KEY}
 
-def obtener_datos_paginados(endpoint, params=None):
-    page = 0
-    resultados = []
-    if params is None:
-        params = {}
-    params.update({"api_token": api_token})  # Añadir token a los parámetros
+# Endpoints y paginación
+ENDPOINTS_CONFIG = {
+    "Deals": ("/deals/collection", "cursor", {}, "Pipedrive Deals"),
+    "Organizations": ("/organizations/collection", "cursor", {}, "Pipedrive Organizations"),
+    "Activities": ("/activities/collection", "cursor", {}, "Pipedrive Activities"),
+    "Leads": ("/leads", "offset", {}, "Pipedrive Leads"),
+    "Users": ("/users", "offset", {}, "Pipedrive Users"),
+    "Notes": ("/notes", "offset", {}, "Pipedrive Notes"),
+}
+
+# --- Funciones ---
+
+def fetch_data_cursor(endpoint, extra_params):
+    all_data = []
+    cursor = None
+    url = f"{BASE_URL_V1}{endpoint}"
     while True:
-        page += 1
-        params.update({
-            "start": (page - 1) * 500,
-            "limit": 500
-        })
-        url = f"{base_url}/{endpoint}"
-        response = requests.get(url, params=params)
-        print(f"🔍 Solicitud a {url} con params {params} - Código de estado: {response.status_code}")
-        if response.status_code != 200:
-            print(f"⚠️ Error en la solicitud: {response.text}")
+        params = extra_params.copy()
+        if cursor:
+            params["cursor"] = cursor
+        params["limit"] = 100
+        print(f"Consultando cursor: {url} params={params}")
+        response = requests.get(url, headers=HEADERS, params=params)
+        print(f"Status code: {response.status_code}")
+        data = response.json()
+        if not data.get("success"):
+            print(f"Error API: {data.get('error')}")
             break
+        items = data.get("data", [])
+        if not items:
+            break
+        all_data.extend(items)
+        cursor = data.get("additional_data", {}).get("next_cursor")
+        if not cursor:
+            break
+    return all_data
+
+def fetch_data_offset(endpoint, extra_params):
+    all_data = []
+    start = 0
+    limit = 100
+    url = f"{BASE_URL_V1}{endpoint}"
+    while True:
+        params = {"start": start, "limit": limit}
+        params.update(extra_params)
+        print(f"Consultando offset: {url} params={params}")
+        response = requests.get(url, headers=HEADERS, params=params)
+        print(f"Status code: {response.status_code}")
+        data = response.json()
+        if not data.get("success"):
+            print(f"Error API: {data.get('error')}")
+            break
+        items = data.get("data", [])
+        if not items:
+            break
+        all_data.extend(items)
+        pagination = data.get("additional_data", {}).get("pagination", {})
+        if not pagination.get("more_items_in_collection"):
+            break
+        start = pagination.get("next_start", start + limit)
+    return all_data
+
+def authenticate_google_sheets():
+    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client
+
+def update_sheet(sheet, dataframe):
+    sheet.clear()
+    sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
+
+def main():
+    client = authenticate_google_sheets()
+    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+    for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
+        print(f"\n🔍 Procesando endpoint: {name}")
+        if pagination_type == "cursor":
+            data = fetch_data_cursor(endpoint, extra_params)
+        else:
+            data = fetch_data_offset(endpoint, extra_params)
+
+        if not data:
+            print(f"⚠️ No se obtuvieron datos de {name}")
+            continue
+
+        df = pd.DataFrame(data)
+        print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
         try:
-            data = response.json()
-            if not data.get("items"):  # Verificar si hay items en v2
-                print("⚠️ No se encontraron items en la respuesta.")
-                break
-            resultados.extend(data["items"])
-            next_page_token = data.get("additional_data", {}).get("pagination", {}).get("next_page_token")
-            if not next_page_token:
-                break
-            params["next_page_token"] = next_page_token
-        except json.JSONDecodeError as e:
-            print(f"⚠️ Error decodificando JSON: {e}. Respuesta: {response.text}")
-            break
-    return pd.json_normalize(resultados) if resultados else pd.DataFrame()
+            worksheet = spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
 
-def limpiar_dataframe(df):
-    df.replace([float("inf"), float("-inf")], pd.NA, inplace=True)
-    df.fillna("", inplace=True)
-    for col in df.columns:
-        df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x)
-    return df
+        update_sheet(worksheet, df)
+        print(f"Hoja '{sheet_name}' actualizada correctamente.")
 
-def exportar_a_sheets_limited(df, sheet_url, hoja_nombre, max_cols_letter):
-    try:
-        spreadsheet = client.open_by_url(sheet_url)
-        worksheet = spreadsheet.worksheet(hoja_nombre)
-        col_limit = ord(max_cols_letter) - ord('A') + 1 if len(max_cols_letter) == 1 else \
-                    (ord(max_cols_letter[0]) - ord('A') + 1) * 26 + (ord(max_cols_letter[1]) - ord('A') + 1)
-        df_limit = df.iloc[:, :col_limit]
-        range_notation = f"A1:{max_cols_letter}"
-        worksheet.update(range_notation, [df_limit.columns.tolist()] + df_limit.values.tolist())
-        print(f"✅ Exportado: {hoja_nombre} hasta columna {max_cols_letter}")
-    except Exception as e:
-        print(f"⚠️ Error al exportar a {hoja_nombre}: {e}")
+if __name__ == "__main__":
+    main()
 
-def exportar_completo(df, sheet_url, hoja_nombre):
-    try:
-        spreadsheet = client.open_by_url(sheet_url)
-        worksheet = spreadsheet.worksheet(hoja_nombre)
-        worksheet.clear()
-        worksheet.update([df.columns.values.tolist()] + df.values.tolist())
-        print(f"✅ Exportado: {hoja_nombre}")
-    except Exception as e:
-        print(f"⚠️ Error al exportar a {hoja_nombre}: {e}")
-
-# 🔗 URL de tu hoja de cálculo
-sheet_url = "https://docs.google.com/spreadsheets/d/1oR_fdVCyn1cA8zwH4XgU5VK63cZaDC3I1i3-SWaUT20/edit"
-
-# 📥 Exportar negocios (hasta CR)
-print("🔍 Exportando deals...")
-df_deals = obtener_datos_paginados("deals")
-if not df_deals.empty:
-    df_deals = limpiar_dataframe(df_deals)
-    exportar_a_sheets_limited(df_deals, sheet_url, "Pipedrive Deals", "CR")
-else:
-    print("⚠️ No se obtuvieron datos para deals.")
-
-# 📥 Exportar notas (hasta AA)
-print("🔍 Exportando notas...")
-df_notes = obtener_datos_paginados("notes")
-if not df_notes.empty:
-    df_notes = limpiar_dataframe(df_notes)
-    exportar_a_sheets_limited(df_notes, sheet_url, "Pipedrive Notas", "AA")
-else:
-    print("⚠️ No se obtuvieron datos para notas.")
-
-# 📥 Exportar actividades (hasta DA)
-print("🔍 Exportando actividades...")
-df_activities = obtener_datos_paginados("activities", {"user_id": "0"})
-if not df_activities.empty:
-    df_activities = limpiar_dataframe(df_activities)
-    exportar_a_sheets_limited(df_activities, sheet_url, "Pipedrive Activities", "DA")
-else:
-    print("⚠️ No se obtuvieron datos para actividades.")
-
-# 📥 Exportar usuarios completo (sin límite)
-print("🔍 Exportando usuarios...")
-df_users = obtener_datos_paginados("users")
-if not df_users.empty:
-    df_users = limpiar_dataframe(df_users)
-    exportar_completo(df_users, sheet_url, "Pipedrive Users")
-else:
-    print("⚠️ No se obtuvieron datos para usuarios.")
-
-print("🎉 Exportación completa. Hoy es 14 de julio de 2025, 06:22 PM -03.")
