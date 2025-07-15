@@ -33,10 +33,10 @@ ENDPOINTS_CONFIG = {
 }
 
 CLEAR_RANGES = {
-    "Pipedrive Deals": "A:AJ",
+    "Pipedrive Deals": "A:V",
     "Pipedrive Notes": "A:T",
     "Pipedrive Organizations": "A:AB",
-    "Pipedrive Activities": "A:AA",
+    "Pipedrive Activities": "A:AJ",
     "Pipedrive Users": "A:T",
     "Pipedrive Analisis": "A:ZZ"
 }
@@ -106,8 +106,8 @@ def update_sheet(sheet, dataframe, clear_range):
     sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
-# --- Normalizar user_id y org_id ---
-def normalize_user_id(df, field):
+# --- Normalizar fields genérico ---
+def normalize_field(df, field):
     if field in df.columns:
         if isinstance(df[field].iloc[0], dict):
             df[field] = df[field].apply(lambda x: x.get('id') if isinstance(x, dict) else np.nan)
@@ -131,10 +131,10 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     base = base.merge(usuarios, on='userId', how='left')
 
     # Normalizar fields
-    df_activities = normalize_user_id(df_activities, 'user_id')
-    df_deals = normalize_user_id(df_deals, 'user_id')
-    df_activities = normalize_user_id(df_activities, 'org_id')
-    df_deals = normalize_user_id(df_deals, 'org_id')
+    df_activities = normalize_field(df_activities, 'owner_id')
+    df_deals = normalize_field(df_deals, 'owner_id')
+    df_activities = normalize_field(df_activities, 'org_id')
+    df_deals = normalize_field(df_deals, 'org_id')
 
     if 'done' in df_activities.columns:
         df_activities['done'] = df_activities['done'].astype(bool)
@@ -154,23 +154,23 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
         act_totales = df_activities[
             (df_activities['done']) &
             (df_activities['org_id'] == org_id) &
-            (df_activities['user_id'] == user_id) &
+            (df_activities['owner_id'] == user_id) &
             (df_activities['due_date'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_creados = df_deals[
             (df_deals['org_id'] == org_id) &
-            (df_deals['user_id'] == user_id) &
+            (df_deals['owner_id'] == user_id) &
             (df_deals['add_time'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_ganados = df_deals[
             (df_deals['org_id'] == org_id) &
-            (df_deals['user_id'] == user_id) &
+            (df_deals['owner_id'] == user_id) &
             (df_deals['status'] == 'won') &
             (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_perdidos = df_deals[
             (df_deals['org_id'] == org_id) &
-            (df_deals['user_id'] == user_id) &
+            (df_deals['owner_id'] == user_id) &
             (df_deals['status'] == 'lost') &
             (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
         ]
@@ -178,7 +178,7 @@ def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
             (df_activities['done']) &
             (df_activities['deal_id'].notna()) &
             (df_activities['org_id'] == org_id) &
-            (df_activities['user_id'] == user_id) &
+            (df_activities['owner_id'] == user_id) &
             (df_activities['due_date'].dt.to_period('M') == mes.to_period('M'))
         ]
         result.append({
