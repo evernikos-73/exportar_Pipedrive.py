@@ -18,7 +18,13 @@ BASE_URL_V2 = "https://inprocilsa.pipedrive.com/api/v2"
 HEADERS = {"x-api-token": PIPEDRIVE_API_KEY}
 
 ENDPOINTS_CONFIG = {
-    "Deals": ("/deals", "cursor", {"include_fields": "first_won_time,products_count"}, "Pipedrive Deals", BASE_URL_V2),
+    "Deals": (
+        "/deals",
+        "cursor",
+        {"include_fields": "first_won_time,products_count,activities_count,done_activities_count"},
+        "Pipedrive Deals",
+        BASE_URL_V2
+    ),
     "Organizations": ("/organizations/collection", "cursor", {}, "Pipedrive Organizations", BASE_URL_V1),
     "Activities": ("/activities", "cursor", {}, "Pipedrive Activities", BASE_URL_V2),
     "Leads": ("/leads", "offset", {}, "Pipedrive Leads", BASE_URL_V1),
