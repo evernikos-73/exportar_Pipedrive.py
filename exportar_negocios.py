@@ -99,12 +99,17 @@ def update_sheet(sheet, dataframe, clear_range):
     sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
-def build_analysis_df(df_orgs, df_activities, df_deals):
+def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
     fechas = pd.date_range("2025-01-01", "2026-12-01", freq='MS')
     orgs = df_orgs[['id', 'name']].drop_duplicates()
     orgs.columns = ['OrganizationID', 'Organization Name']
-    base = pd.DataFrame(list(product(fechas, orgs['OrganizationID'])), columns=['MesAño', 'OrganizationID'])
+    usuarios = df_users[['id', 'name']].drop_duplicates()
+    usuarios.columns = ['userId', 'UserName']
+
+    base = pd.DataFrame(list(product(fechas, orgs['OrganizationID'], usuarios['userId'])),
+                        columns=['MesAño', 'OrganizationID', 'userId'])
     base = base.merge(orgs, on='OrganizationID', how='left')
+    base = base.merge(usuarios, on='userId', how='left')
 
     if 'done' in df_activities.columns:
         df_activities['done'] = df_activities['done'].astype(bool)
@@ -124,23 +129,28 @@ def build_analysis_df(df_orgs, df_activities, df_deals):
     for _, row in base.iterrows():
         mes = row['MesAño']
         org_id = row['OrganizationID']
+        user_id = row['userId']
 
         act_totales = df_activities[
             (df_activities['done']) &
             (df_activities['org_id'] == org_id) &
+            (df_activities['user_id'] == user_id) &
             (df_activities['due_date'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_creados = df_deals[
             (df_deals['org_id'] == org_id) &
+            (df_deals['owner_id'] == user_id) &
             (df_deals['add_time'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_ganados = df_deals[
             (df_deals['org_id'] == org_id) &
+            (df_deals['owner_id'] == user_id) &
             (df_deals['status'] == 'won') &
             (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
         ]
         deals_perdidos = df_deals[
             (df_deals['org_id'] == org_id) &
+            (df_deals['owner_id'] == user_id) &
             (df_deals['status'] == 'lost') &
             (df_deals['close_time'].dt.to_period('M') == mes.to_period('M'))
         ]
@@ -148,12 +158,15 @@ def build_analysis_df(df_orgs, df_activities, df_deals):
             (df_activities['done']) &
             (df_activities['deal_id'].notna()) &
             (df_activities['org_id'] == org_id) &
+            (df_activities['user_id'] == user_id) &
             (df_activities['due_date'].dt.to_period('M') == mes.to_period('M'))
         ]
         result.append({
             'MesAño': mes,
             'OrganizationID': org_id,
             'Organization Name': row['Organization Name'],
+            'userId': user_id,
+            'UserName': row['UserName'],
             'Actividad Total': len(act_totales),
             'Negocios creados': len(deals_creados),
             'Negocios ganados': len(deals_ganados),
@@ -162,7 +175,6 @@ def build_analysis_df(df_orgs, df_activities, df_deals):
         })
     return pd.DataFrame(result)
 
-# --- Main ---
 def main():
     client = authenticate_google_sheets()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
@@ -196,7 +208,8 @@ def main():
     df_analysis = build_analysis_df(
         df_orgs=dataframes["Organizations"],
         df_activities=dataframes["Activities"],
-        df_deals=dataframes["Deals"]
+        df_deals=dataframes["Deals"],
+        df_users=dataframes["Users"]
     )
     print(f"\n✅ Análisis generado con {len(df_analysis)} filas")
 
@@ -209,4 +222,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
