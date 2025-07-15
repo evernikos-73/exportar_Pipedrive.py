@@ -86,34 +86,43 @@ def authenticate_google_sheets():
     client = gspread.authorize(creds)
     return client
 
-def update_sheet(sheet, dataframe):
-    sheet.clear()
+CLEAR_RANGES = {
+    "Pipedrive Deals": "A:V",
+    "Pipedrive Notes": "A:T",
+    "Pipedrive Organizations": "A:AB",
+    "Pipedrive Activities": "A:AJ",
+    "Pipedrive Users": "A:T"
+}
+
+def update_sheet(sheet, dataframe, clear_range):
+    print(f" - Borrando rango: {clear_range}")
+    sheet.batch_clear([clear_range])
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
-def main():
-    client = authenticate_google_sheets()
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-    for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
-        print(f"\n🔍 Procesando endpoint: {name}")
-        if pagination_type == "cursor":
-            data = fetch_data_cursor(endpoint, extra_params)
-        else:
-            data = fetch_data_offset(endpoint, extra_params)
+for name, (endpoint, pagination_type, extra_params, sheet_name) in ENDPOINTS_CONFIG.items():
+    print(f"\n🔍 Procesando endpoint: {name}")
+    if pagination_type == "cursor":
+        data = fetch_data_cursor(endpoint, extra_params)
+    else:
+        data = fetch_data_offset(endpoint, extra_params)
 
-        if not data:
-            print(f"⚠️ No se obtuvieron datos de {name}")
-            continue
+    if not data:
+        print(f"⚠️ No se obtuvieron datos de {name}")
+        continue
 
-        df = pd.DataFrame(data)
-        print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
-        try:
-            worksheet = spreadsheet.worksheet(sheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
+    df = pd.DataFrame(data)
+    print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
 
-        update_sheet(worksheet, df)
-        print(f"Hoja '{sheet_name}' actualizada correctamente.")
+    clear_range = CLEAR_RANGES.get(sheet_name, "A:ZZ")  # default por si no hay definido
+    try:
+        worksheet = spreadsheet.worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
+
+    update_sheet(worksheet, df, clear_range)
+    print(f"Hoja '{sheet_name}' actualizada correctamente.")
+
 
 if __name__ == "__main__":
     main()
