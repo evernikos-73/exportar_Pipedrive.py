@@ -4,7 +4,6 @@ import requests
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from itertools import product
 from datetime import datetime
 import numpy as np
 
@@ -41,7 +40,15 @@ CLEAR_RANGES = {
     "Pipedrive Analisis": "A:J"
 }
 
-# --- Fetching ---
+# --- Utilidades ---
+def coerce_datetimes(df: pd.DataFrame, cols):
+    """Convierte columnas a datetime (UTC->naive) de forma segura."""
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
+            df[c] = df[c].dt.tz_localize(None)
+    return df
+
 def fetch_data_cursor(url, extra_params):
     all_data = []
     cursor = None
@@ -101,90 +108,163 @@ def authenticate_google_sheets():
     client = gspread.authorize(creds)
     return client
 
-def update_sheet(sheet, dataframe, clear_range):
+def update_sheet(sheet, dataframe: pd.DataFrame, clear_range: str):
     print(f" - Borrando rango: {clear_range}")
     sheet.batch_clear([clear_range])
+    if dataframe is None or dataframe.empty:
+        # Escribimos solo headers mínimos para dejar la hoja usable
+        sheet.update([["Sin datos"]])
+        return
     sheet.update([dataframe.columns.values.tolist()] + dataframe.fillna("").astype(str).values.tolist())
 
-# --- Normalizar fields genérico ---
-def normalize_field(df, field):
-    if field in df.columns:
-        if isinstance(df[field].iloc[0], dict):
-            df[field] = df[field].apply(lambda x: x.get('id') if isinstance(x, dict) else np.nan)
-    elif f"{field}.id" in df.columns:
-        df[field] = df[f"{field}.id"]
-    else:
-        df[field] = np.nan
-    return df
-
-# --- Build analysis DF (UPDATED) ---
+# --- Build analysis DF ---
 def build_analysis_df(df_orgs, df_activities, df_deals, df_users):
-    # NEW: Find dynamic date range from data (min to max relevant dates, monthly)
-    all_dates = pd.concat([
-        df_activities['due_date'].dropna(),
-        df_deals['add_time'].dropna(),
-        df_deals['close_time'].dropna()
-    ])
+    # Asegurar datetime en columnas clave (segunda línea de defensa)
+    if not df_activities.empty:
+        df_activities = coerce_datetimes(df_activities, ["due_date", "add_time", "update_time", "marked_as_done_time"])
+    if not df_deals.empty:
+        df_deals = coerce_datetimes(df_deals, ["add_time", "close_time", "update_time", "expected_close_date", "first_won_time"])
+
+    partes = []
+    if not df_activities.empty and "due_date" in df_activities.columns:
+        partes.append(df_activities["due_date"])
+    if not df_deals.empty and "add_time" in df_deals.columns:
+        partes.append(df_deals["add_time"])
+    if not df_deals.empty and "close_time" in df_deals.columns:
+        partes.append(df_deals["close_time"])
+
+    if not partes:
+        return pd.DataFrame()
+
+    all_dates = pd.concat(partes).dropna()
     if all_dates.empty:
-        return pd.DataFrame()  # No data, return empty
-    min_date = all_dates.min().replace(day=1)  # Start of earliest month
-    max_date = datetime.now().replace(day=1)  # Start of current month (no future)
-    fechas = pd.date_range(min_date, max_date, freq='MS')
+        return pd.DataFrame()
 
-    orgs = df_orgs[['id', 'name']].drop_duplicates()
-    orgs.columns = ['OrganizationID', 'Organization Name']
-    usuarios = df_users[['id', 'name']].drop_duplicates()
-    usuarios.columns = ['userId', 'UserName']
+    # Periodos mensuales seguros (evita .replace sobre strings)
+    min_month = all_dates.dt.to_period("M").min()
+    max_month = pd.Timestamp.now().to_period("M")
+    _fechas = pd.period_range(min_month, max_month, freq="M").to_timestamp()
 
-    # NEW: Instead of full product, we'll build from data and merge (more efficient, avoids huge temp DF)
-    # Prepare grouped counts
-    df_activities['mes'] = df_activities['due_date'].dt.to_period('M')
-    act_total = df_activities[df_activities['done']].groupby(['mes', 'org_id', 'owner_id']).size().reset_index(name='Actividad Total')
-    act_negocios = df_activities[df_activities['done'] & df_activities['deal_id'].notna()].groupby(['mes', 'org_id', 'owner_id']).size().reset_index(name='Actividad Negocios')
+    # Columnas de mes
+    if not df_activities.empty and "due_date" in df_activities.columns:
+        df_activities["mes"] = df_activities["due_date"].dt.to_period("M")
+    else:
+        df_activities = pd.DataFrame(columns=["mes", "org_id", "owner_id", "deal_id", "done"])
 
-    df_deals['mes_add'] = df_deals['add_time'].dt.to_period('M')
-    df_deals['mes_close'] = df_deals['close_time'].dt.to_period('M')
-    deals_creados = df_deals.groupby(['mes_add', 'org_id', 'owner_id']).size().reset_index(name='Negocios creados').rename(columns={'mes_add': 'mes'})
-    deals_ganados = df_deals[df_deals['status'] == 'won'].groupby(['mes_close', 'org_id', 'owner_id']).size().reset_index(name='Negocios ganados').rename(columns={'mes_close': 'mes'})
-    deals_perdidos = df_deals[df_deals['status'] == 'lost'].groupby(['mes_close', 'org_id', 'owner_id']).size().reset_index(name='Negocios perdidos').rename(columns={'mes_close': 'mes'})
+    if not df_deals.empty:
+        df_deals["mes_add"] = df_deals["add_time"].dt.to_period("M")
+        df_deals["mes_close"] = df_deals["close_time"].dt.to_period("M")
+    else:
+        df_deals = pd.DataFrame(columns=["mes_add", "mes_close", "org_id", "owner_id", "status"])
 
-    # Merge all on mes, org_id, owner_id
-    df_analysis = pd.concat([act_total, act_negocios, deals_creados, deals_ganados, deals_perdidos])
-    df_analysis = df_analysis.groupby(['mes', 'org_id', 'owner_id']).sum().reset_index().fillna(0)
+    # Agrupaciones
+    done_mask = df_activities.get("done", False) == True
+    act_total = (df_activities[done_mask]
+                 .groupby(["mes", "org_id", "owner_id"])
+                 .size()
+                 .reset_index(name="Actividad Total")) if not df_activities.empty else pd.DataFrame(columns=["mes","org_id","owner_id","Actividad Total"])
 
-    # NEW: Filter out all-zero rows
-    count_cols = ['Actividad Total', 'Actividad Negocios', 'Negocios creados', 'Negocios ganados', 'Negocios perdidos']
-    df_analysis = df_analysis[df_analysis[count_cols].sum(axis=1) > 0]
+    act_negocios = (df_activities[done_mask & df_activities["deal_id"].notna()]
+                    .groupby(["mes", "org_id", "owner_id"])
+                    .size()
+                    .reset_index(name="Actividad Negocios")) if not df_activities.empty and "deal_id" in df_activities.columns else pd.DataFrame(columns=["mes","org_id","owner_id","Actividad Negocios"])
 
-    # Convert mes back to datetime for MesAño
-    df_analysis['MesAño'] = df_analysis['mes'].dt.to_timestamp()
-    df_analysis = df_analysis.drop(columns=['mes'])
+    deals_creados = (df_deals.groupby(["mes_add", "org_id", "owner_id"])
+                     .size()
+                     .reset_index(name="Negocios creados")
+                     .rename(columns={"mes_add": "mes"})) if not df_deals.empty else pd.DataFrame(columns=["mes","org_id","owner_id","Negocios creados"])
 
-    # Join names
-    df_analysis = df_analysis.merge(orgs, left_on='org_id', right_on='OrganizationID', how='left')
-    df_analysis = df_analysis.merge(usuarios, left_on='owner_id', right_on='userId', how='left')
+    deals_ganados = (df_deals[df_deals.get("status") == "won"]
+                     .groupby(["mes_close", "org_id", "owner_id"])
+                     .size()
+                     .reset_index(name="Negocios ganados")
+                     .rename(columns={"mes_close": "mes"})) if not df_deals.empty else pd.DataFrame(columns=["mes","org_id","owner_id","Negocios ganados"])
 
-    # Reorder columns
-    cols = ['MesAño', 'OrganizationID', 'Organization Name', 'userId', 'UserName'] + count_cols
-    return df_analysis[cols]
+    deals_perdidos = (df_deals[df_deals.get("status") == "lost"]
+                      .groupby(["mes_close", "org_id", "owner_id"])
+                      .size()
+                      .reset_index(name="Negocios perdidos")
+                      .rename(columns={"mes_close": "mes"})) if not df_deals.empty else pd.DataFrame(columns=["mes","org_id","owner_id","Negocios perdidos"])
 
-# --- Main (UPDATED slightly) ---
+    # Unión y filtro de filas vacías
+    df_analysis = pd.concat(
+        [act_total, act_negocios, deals_creados, deals_ganados, deals_perdidos],
+        ignore_index=True
+    )
+
+    if df_analysis.empty:
+        return pd.DataFrame()
+
+    df_analysis = df_analysis.groupby(["mes", "org_id", "owner_id"], as_index=False).sum(numeric_only=True).fillna(0)
+
+    count_cols = ["Actividad Total", "Actividad Negocios", "Negocios creados", "Negocios ganados", "Negocios perdidos"]
+    for c in count_cols:
+        if c not in df_analysis.columns:
+            df_analysis[c] = 0
+
+    keep = df_analysis[count_cols].sum(axis=1) > 0
+    df_analysis = df_analysis[keep]
+
+    # MesAño a timestamp
+    df_analysis["MesAño"] = df_analysis["mes"].dt.to_timestamp()
+    df_analysis = df_analysis.drop(columns=["mes"])
+
+    # Nombres
+    if not df_orgs.empty and {"id","name"}.issubset(df_orgs.columns):
+        orgs = df_orgs[["id", "name"]].drop_duplicates().rename(columns={"id": "OrganizationID", "name": "Organization Name"})
+    else:
+        orgs = pd.DataFrame(columns=["OrganizationID","Organization Name"])
+
+    if not df_users.empty and {"id","name"}.issubset(df_users.columns):
+        usuarios = df_users[["id", "name"]].drop_duplicates().rename(columns={"id": "userId", "name": "UserName"})
+    else:
+        usuarios = pd.DataFrame(columns=["userId","UserName"])
+
+    df_analysis = df_analysis.merge(orgs, left_on="org_id", right_on="OrganizationID", how="left")
+    df_analysis = df_analysis.merge(usuarios, left_on="owner_id", right_on="userId", how="left")
+
+    cols = ["MesAño", "OrganizationID", "Organization Name", "userId", "UserName"] + count_cols
+    for c in cols:
+        if c not in df_analysis.columns:
+            df_analysis[c] = np.nan
+
+    df_analysis = df_analysis[cols].sort_values(["MesAño","OrganizationID","userId"], kind="stable").reset_index(drop=True)
+    return df_analysis
+
+# --- Main ---
 def main():
     client = authenticate_google_sheets()
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     dataframes = {}
+
     for name, (endpoint, pagination_type, extra_params, sheet_name, base_url) in ENDPOINTS_CONFIG.items():
         print(f"\n🔍 Procesando endpoint: {name}")
         if pagination_type == "cursor":
             data = fetch_data_cursor(base_url + endpoint, extra_params)
         else:
             data = fetch_data_offset(base_url + endpoint, extra_params)
+
         if not data:
             print(f"⚠️ No se obtuvieron datos de {name}")
-            dataframes[name] = pd.DataFrame()
-            continue
-        df = pd.DataFrame(data)
-        dataframes[name] = df
+            df = pd.DataFrame()
+            dataframes[name] = df
+        else:
+            df = pd.DataFrame(data)
+            # Coerción de fechas por endpoint (primera línea de defensa)
+            name_lower = name.lower()
+            if name_lower == "activities":
+                df = coerce_datetimes(df, ["due_date", "add_time", "update_time", "marked_as_done_time"])
+            elif name_lower == "deals":
+                df = coerce_datetimes(df, ["add_time", "close_time", "update_time", "expected_close_date", "first_won_time"])
+            elif name_lower == "notes":
+                df = coerce_datetimes(df, ["add_time", "update_time"])
+            elif name_lower == "organizations":
+                df = coerce_datetimes(df, ["add_time", "update_time"])
+            elif name_lower == "leads":
+                df = coerce_datetimes(df, ["add_time", "update_time"])
+
+            dataframes[name] = df
+
         print(f"✅ {name}: {len(df)} registros. Actualizando hoja '{sheet_name}'...")
         clear_range = CLEAR_RANGES.get(sheet_name, "A:ZZ")
         try:
@@ -196,11 +276,12 @@ def main():
 
     # --- Crear y subir dataframe de análisis ---
     df_analysis = build_analysis_df(
-        df_orgs=dataframes["Organizations"],
-        df_activities=dataframes["Activities"],
-        df_deals=dataframes["Deals"],
-        df_users=dataframes["Users"]
+        df_orgs=dataframes.get("Organizations", pd.DataFrame()),
+        df_activities=dataframes.get("Activities", pd.DataFrame()),
+        df_deals=dataframes.get("Deals", pd.DataFrame()),
+        df_users=dataframes.get("Users", pd.DataFrame())
     )
+
     print(f"\n✅ Análisis generado con {len(df_analysis)} filas")
     try:
         ws_analysis = spreadsheet.worksheet("Pipedrive Analisis")
@@ -211,4 +292,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
